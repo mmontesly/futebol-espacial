@@ -92,7 +92,11 @@ const step = (s: Sim, dt: number, onSfx: (k: string) => void) => {
     if (s.sc[goal] >= GOALS_TO_WIN) s.over = true;
     return;
   }
-  if (s.bx < -6 || s.bx > FW + 6) { s.bOut = 1.3; s.ev = 'Foi pro espaço! 🌌'; s.evT = 1.3; onSfx('out'); }
+  // paredes que quicam: a bola nunca sai do campo
+  if (s.bx < BR) { s.bx = BR; s.bvx = Math.abs(s.bvx) * 0.85; onSfx('bump'); }
+  if (s.bx > FW - BR) { s.bx = FW - BR; s.bvx = -Math.abs(s.bvx) * 0.85; onSfx('bump'); }
+  if (!inMouth) { if (s.by < BR) s.by = BR; if (s.by > FH - BR) s.by = FH - BR; }
+  else { s.bx = Math.max(GL + BR * 0.5, Math.min(GR - BR * 0.5, s.bx)); }
 };
 
 type Mode = 'menu' | 'nick' | 'lobby' | 'play' | 'end';
@@ -393,7 +397,7 @@ export default function App() {
         <View style={[st.hudScore, { backgroundColor: TEAM[1].dark }]}><Text style={st.hudTxt}>🟠 {v?.sc[1] ?? 0}</Text></View>
       </View>
       {/* campo */}
-      <View style={{ position: 'absolute', left: ox, top, width: fw, height: fh, backgroundColor: M.field, borderTopWidth: 3, borderBottomWidth: 3, borderColor: 'rgba(255,255,255,0.7)', borderLeftWidth: 2, borderRightWidth: 2, borderStyle: 'dashed' }} pointerEvents="none">
+      <View style={{ position: 'absolute', left: ox, top, width: fw, height: fh, backgroundColor: M.field, borderWidth: 4, borderColor: '#7DF9FF', borderRadius: 6, boxShadow: '0 0 14px #7DF9FF, inset 0 0 10px rgba(125,249,255,0.6)' } as any} pointerEvents="none">
         <View style={{ position: 'absolute', top: fh / 2 - 1, left: 0, right: 0, height: 2, backgroundColor: 'rgba(255,255,255,0.5)' }} />
         <View style={{ position: 'absolute', top: fh / 2 - 15 * sc, left: fw / 2 - 15 * sc, width: 30 * sc, height: 30 * sc, borderRadius: 15 * sc, borderWidth: 2, borderColor: 'rgba(255,255,255,0.5)' }} />
       </View>
