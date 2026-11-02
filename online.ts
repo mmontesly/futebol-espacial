@@ -9,7 +9,7 @@ export type Msg =
   | { t: 'start'; map: string; ids: number[]; nicks: Record<number, string> }
   | { t: 'in'; i: number; x: number; y: number; k: boolean; b: boolean }
   | { t: 'st'; p: number[][]; b: number[]; sc: number[]; tm: number; ev?: string; out?: boolean }
-  | { t: 'end'; sc: number[] };
+  | { t: 'end'; sc: number[] } | { t: 'bo'; n: number } | { t: 'score'; w: number[]; champ: number; match: number };
 export type Room = { code: string; me: number; isHost: boolean; send: (m: Msg) => void; close: () => void; ids: () => number[]; lock: () => void; setCap: (n: number) => void };
 export type Handlers = { onMsg: (m: Msg) => void; onClose: () => void };
 

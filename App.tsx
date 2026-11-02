@@ -108,6 +108,12 @@ export default function App() {
   const [lobby, setLobby] = useState<{ ids: number[]; nicks: Record<number, string> }>({ ids: [], nicks: {} });
   const [code, setCode] = useState('');
   const [msg, setMsg] = useState('');
+  const [ov, setOv] = useState<'choose' | 'join' | 'wait'>('choose');
+  const [bo, setBo] = useState(3); const boRef = useRef(3); boRef.current = bo;
+  type Ser = { w: number[]; champ: number; match: number };
+  const [ser, setSer] = useState<Ser>({ w: [0, 0], champ: -1, match: 0 }); const serRef = useRef<Ser>(ser);
+  const applyScore = (x: Ser) => { serRef.current = x; setSer(x); };
+  const resetSeries = () => applyScore({ w: [0, 0], champ: -1, match: 0 });
   const [, setTick] = useState(0);
   const [result, setResult] = useState<number[]>([0, 0]);
   const [myTeam, setMyTeam] = useState(0);
@@ -135,7 +141,15 @@ export default function App() {
 
   const toView = (s: Sim): View2 => ({ ps: s.ps.map(p => ({ id: p.id, x: p.x, y: p.y, a: p.a, team: p.team, nick: p.nick, turbo: p.turbo > 0 })), bx: s.bx, by: s.by, bOut: s.bOut > 0, sc: [...s.sc], tm: s.tm, ev: s.ev, evT: s.evT });
 
-  const finish = (sc: number[]) => { setResult(sc); setMode('end'); vib(120); };
+  const finish = (sc: number[]) => {
+    setResult(sc); setMode('end'); vib(120);
+    const r = roomRef.current;
+    if (r?.isHost) { // o host conta as vitórias da série e manda para todos
+      const w = sc[0] > sc[1] ? 0 : sc[1] > sc[0] ? 1 : -1; const nw = [...serRef.current.w]; if (w >= 0) nw[w]++;
+      const nx = { w: nw, champ: w >= 0 && nw[w] >= boRef.current ? w : -1, match: serRef.current.match }; applyScore(nx); r.send({ t: 'score', ...nx });
+      if (nx.champ >= 0) setTimeout(() => { r.close(); setRoom(null); }, 2500); // série acabou: desconecta
+    }
+  };
 
   // ---------- Loop ----------
   useEffect(() => {
@@ -196,11 +210,12 @@ export default function App() {
   }, [mode]);
 
   // ---------- Modos ----------
-  const startSolo = () => { vib(); leave(); meRef.current = 0; setMyTeam(0); sim.current = newSim([{ id: 0, nick: 'Você' }, { id: 1, nick: 'Robô', ai: true }]); setOnline(false); setMode('play'); };
+  const startSolo = () => { vib(); leave(); resetSeries(); meRef.current = 0; setMyTeam(0); sim.current = newSim([{ id: 0, nick: 'Você' }, { id: 1, nick: 'Robô', ai: true }]); setOnline(false); setMode('play'); };
+  useEffect(() => { if (room) setOnline(true); }, [room]);
   const leave = () => { roomRef.current?.close(); setRoom(null); snap.current = { prev: null, next: null, at: 0 }; };
   const backMenu = () => { vib(); leave(); sim.current = null; setMode('menu'); setMsg(''); setCode(''); };
 
-  const hostLobby = (r: Room) => { const ids = r.ids(); const ln = { ids, nicks: { ...nicksRef.current } }; setLobby(ln); r.send({ t: 'lobby', ids, nicks: ln.nicks, map: mapRef.current, cap: 4 }); };
+  const hostLobby = (r: Room) => { const ids = r.ids(); const ln = { ids, nicks: { ...nicksRef.current } }; setLobby(ln); r.send({ t: 'lobby', ids, nicks: ln.nicks, map: mapRef.current, cap: 4 }); r.send({ t: 'bo', n: boRef.current }); };
   const handlers = (getR: () => Room | null) => ({
     onMsg: (m: Msg) => {
       const r = getR();
@@ -214,28 +229,38 @@ export default function App() {
         const sn = snap.current; if (sn.next && sn.next.ev !== v.ev && v.ev.startsWith('GOL')) sfx('goal'); sn.prev = sn.next || v; sn.next = v; sn.at = performance.now();
       }
       else if (m.t === 'end') { finish(m.sc); }
+      else if (m.t === 'bo') { if ([2, 3, 5].includes(m.n)) { setBo(m.n); boRef.current = m.n; } }
+      else if (m.t === 'score') { if (!getR()?.isHost) { applyScore({ w: m.w, champ: m.champ, match: m.match }); if (m.champ >= 0) setTimeout(() => { getR()?.close(); setRoom(null); }, 2500); } }
     },
-    onClose: () => { setMsg('A sala fechou 😢'); leave(); setMode('menu'); },
+    onClose: () => { if (serRef.current.champ >= 0) { setRoom(null); return; } setMsg('A sala fechou 😢'); leave(); setMode('menu'); },
   });
+  const errText = (e: any) => e === 'full' ? 'Sala cheia ou já começou 🙈' : e === 'timeout' ? 'Demorou demais ⏳ Tente de novo.' : 'Não achei essa sala 🔍 Confira o número!';
   const create = async () => {
-    vib(); setMsg('Criando sala... ⏳');
+    vib(); resetSeries(); setOv('wait');
     try { let rr: Room | null = null; const r = await createRoom(handlers(() => rr)); rr = r; meRef.current = 0; nicksRef.current = { 0: nick }; setRoom(r); hostLobby(r); setMsg(''); setMode('lobby'); }
-    catch { setMsg('Não deu para criar a sala 😢 Tente de novo.'); }
+    catch (e) { setOv('choose'); setMsg('Não deu para criar a sala 😢 Tente de novo.'); }
   };
   const join = async () => {
-    if (code.length !== 4) return; vib(); setMsg('Entrando... ⏳');
-    try { let rr: Room | null = null; const r = await joinRoom(code, handlers(() => rr)); rr = r; meRef.current = r.me; setRoom(r); r.send({ t: 'nick', i: r.me, n: nick }); setMsg(''); setMode('lobby'); }
-    catch (e) { setMsg(e === 'full' ? 'Sala cheia ou já começou 🙈' : 'Não achei essa sala 🔍'); }
+    if (code.length !== 4) return; vib(); resetSeries(); setOv('wait'); setMsg('');
+    let err: any = null;
+    for (let t = 0; t < 3; t++) { // a sala pode demorar um pouquinho para aparecer: tenta 3 vezes
+      try { let rr: Room | null = null; const r = await joinRoom(code, handlers(() => rr)); rr = r; meRef.current = r.me; setRoom(r); r.send({ t: 'nick', i: r.me, n: nick }); setMode('lobby'); return; }
+      catch (e) { err = e; if (e === 'full') break; await new Promise(z => setTimeout(z, 1500)); }
+    }
+    setOv('join'); setCode(''); setMsg(errText(err));
   };
   const hostStart = () => {
-    const r = roomRef.current; if (!r || r.ids().length < 2) return; vib(); r.lock();
+    const r = roomRef.current; if (!r || r.ids().length < 2 || serRef.current.champ >= 0) return; vib(); r.lock();
     const ids = r.ids(); sim.current = newSim(ids.map(i => ({ id: i, nick: nicksRef.current[i] || '?' }))); setMyTeam(0);
+    const nx = { ...serRef.current, match: serRef.current.match + 1 }; applyScore(nx); r.send({ t: 'score', ...nx });
     r.send({ t: 'start', map, ids, nicks: nicksRef.current }); setMode('play');
   };
+  const playAgain = () => { vib(); leave(); resetSeries(); sim.current = null; setCode(''); setMsg(''); setOv('choose'); setMode('nick'); };
 
   // ---------- Desenho ----------
   const M = MAPS[map];
-  const top = 74, ctrlH = 190;
+  const onl = !!room || (mode === 'end' && online);
+  const top = room ? 96 : 74, ctrlH = 190;
   const sc = Math.min((width - 24) / FW, (height - top - ctrlH - 16) / FH);
   const fw = FW * sc, fh = FH * sc, ox = (width - fw) / 2;
 
@@ -252,8 +277,10 @@ export default function App() {
       </>}
     </View>
   );
+  const MapPick = ({ can, card }: { can: boolean; card?: boolean }) => <View style={st.row}>{(Object.keys(MAPS) as MapId[]).map(k => <Pressable key={k} testID={'map-' + k} onPress={() => { if (!can) return; vib(); setMap(k); mapRef.current = k; if (roomRef.current?.isHost) hostLobby(roomRef.current); }} style={[st.mapBtn, card && { backgroundColor: '#E9ECEF' }, map === k && st.mapOn, !can && map !== k && { opacity: 0.4 }]}><Text style={{ fontSize: 36 }}>{MAPS[k].emoji}</Text><Text style={[st.btnTxt, card && { color: '#023047' }]}>{MAPS[k].name}</Text></Pressable>)}</View>;
+  const SeriesBar = () => <View style={st.serBar}><Text style={st.serTxt}>🏆 Série até {bo}</Text><Text style={[st.serTxt, { color: TEAM[0].col }]}>Azul {'⭐'.repeat(ser.w[0]) || '–'}</Text><Text style={[st.serTxt, { color: TEAM[1].col }]}>Laranja {'⭐'.repeat(ser.w[1]) || '–'}</Text></View>;
 
-  if (mode === 'menu' || mode === 'nick') return (
+  if (mode === 'menu') return (
     <View style={[st.root, { backgroundColor: M.bg }]}>
       <Bg />
       <ScrollView contentContainerStyle={st.menu}>
@@ -261,61 +288,93 @@ export default function App() {
         <Text style={st.title}>Futebol Espacial</Text>
         <Text style={st.sub}>Os foguetinhos jogam bola no espaço!</Text>
         <Text style={st.label}>Escolha o mapa</Text>
-        <View style={st.row}>
-          {(Object.keys(MAPS) as MapId[]).map(k => <Pressable key={k} onPress={() => { vib(); setMap(k); }} style={[st.mapBtn, map === k && st.mapOn]}>
-            <Text style={{ fontSize: 40 }}>{MAPS[k].emoji}</Text><Text style={st.btnTxt}>{MAPS[k].name}</Text></Pressable>)}
-        </View>
-        {mode === 'menu' ? <>
-          <Pressable onPress={startSolo} style={[st.btn, { backgroundColor: '#06D6A0' }]}><Text style={st.btnTxt}>🤖 Contra o computador</Text></Pressable>
-          <Pressable onPress={() => { vib(); setMode('nick'); setMsg(''); }} style={[st.btn, { backgroundColor: '#8338EC' }]}><Text style={st.btnTxt}>👥 Online com amigos</Text></Pressable>
-          <Text style={st.help}>Arraste o dedo à esquerda para voar. ⚽ chuta, 🔥 dá turbo. Faça {GOALS_TO_WIN} gols para ganhar!</Text>
-        </> : <>
-          {!onlineAvailable() ? <Text style={st.help}>O online funciona no navegador 🌐</Text> : <>
-            <Text style={st.label}>Seu apelido</Text>
-            <View style={[st.row, { flexWrap: 'wrap' }]}>{NICKS.map(n => <Pressable key={n} onPress={() => { vib(8); setNick(n); }} style={[st.chip, nick === n && st.chipOn]}><Text style={st.chipTxt}>{n}</Text></Pressable>)}</View>
-            <Pressable onPress={create} style={[st.btn, { backgroundColor: '#06D6A0' }]}><Text style={st.btnTxt}>✨ Criar sala</Text></Pressable>
-            <Text style={st.label}>Ou entre com o código</Text>
-            <Text style={st.code}>{(code + '____').slice(0, 4).split('').join(' ')}</Text>
-            <View style={st.pad}>{['1', '2', '3', '4', '5', '6', '7', '8', '9', '⌫', '0', '✔'].map(d => <Pressable key={d} onPress={() => { vib(8); if (d === '⌫') setCode(c => c.slice(0, -1)); else if (d === '✔') join(); else setCode(c => (c + d).slice(0, 4)); }} style={[st.key, d === '✔' && { backgroundColor: code.length === 4 ? '#06D6A0' : '#555' }]}><Text style={st.btnTxt}>{d}</Text></Pressable>)}</View>
-          </>}
-          <Pressable onPress={backMenu} style={[st.btn, { backgroundColor: '#444' }]}><Text style={st.btnTxt}>⬅ Voltar</Text></Pressable>
-        </>}
+        <MapPick can />
+        <Pressable onPress={startSolo} style={[st.btn, { backgroundColor: '#06D6A0' }]}><Text style={st.btnTxt}>🤖 Contra o computador</Text></Pressable>
+        <Pressable onPress={() => { vib(); setOv('choose'); setMsg(''); setMode('nick'); }} style={[st.btn, { backgroundColor: '#8338EC' }]}><Text style={st.btnTxt}>👥 Online</Text></Pressable>
+        <Text style={st.help}>Arraste o dedo à esquerda para voar. ⚽ chuta, 🔥 dá turbo. Faça {GOALS_TO_WIN} gols para ganhar!</Text>
         {!!msg && <Text style={st.msg}>{msg}</Text>}
       </ScrollView>
     </View>
   );
 
-  if (mode === 'lobby') return (
+  if (mode === 'nick') return (
     <View style={[st.root, { backgroundColor: M.bg }]}><Bg />
       <ScrollView contentContainerStyle={st.menu}>
-        <Text style={st.title}>Sala {room?.code}</Text>
-        <Text style={st.sub}>{room?.isHost ? 'Fale o código para os amigos! (2 a 4 jogadores)' : 'Esperando o dono da sala começar... ⏳'}</Text>
-        {lobby.ids.map((i, k) => <View key={i} style={[st.player, { backgroundColor: TEAM[k % 2].dark }]}><Text style={st.btnTxt}>🚀 {lobby.nicks[i] || '...'} {i === room?.me ? '(você)' : ''}</Text><Text style={st.chipTxt}>Time {TEAM[k % 2].name}</Text></View>)}
-        {room?.isHost && <><Text style={st.label}>Mapa</Text><View style={st.row}>{(Object.keys(MAPS) as MapId[]).map(k => <Pressable key={k} onPress={() => { vib(); setMap(k); mapRef.current = k; roomRef.current && hostLobby(roomRef.current); }} style={[st.mapBtn, map === k && st.mapOn]}><Text style={{ fontSize: 36 }}>{MAPS[k].emoji}</Text><Text style={st.btnTxt}>{MAPS[k].name}</Text></Pressable>)}</View>
-          <Pressable onPress={hostStart} style={[st.btn, { backgroundColor: lobby.ids.length >= 2 ? '#06D6A0' : '#555' }]}><Text style={st.btnTxt}>{lobby.ids.length >= 2 ? '▶ Começar!' : 'Esperando amigos...'}</Text></Pressable></>}
-        {!room?.isHost && <Text style={st.sub}>Mapa: {M.emoji} {M.name}</Text>}
-        <Pressable onPress={backMenu} style={[st.btn, { backgroundColor: '#444' }]}><Text style={st.btnTxt}>⬅ Sair</Text></Pressable>
+        <View style={st.card}>
+          <Text style={st.cardTitle}>Jogo online 👥</Text>
+          {!onlineAvailable() ? <Text style={st.cardSub}>O online funciona no navegador 🌐</Text>
+          : ov === 'wait' ? <Text style={st.cardSub}>Conectando... ⏳</Text>
+          : ov === 'choose' ? <>
+            <Text style={st.cardSub}>Escolha seu apelido:</Text>
+            <View style={[st.row, { flexWrap: 'wrap' }]}>{NICKS.map(n => <Pressable key={n} onPress={() => { vib(8); setNick(n); }} style={[st.chip, nick === n && st.chipOn]}><Text style={[st.chipTxt, nick === n && { color: '#fff' }]}>{n}</Text></Pressable>)}</View>
+            <Pressable onPress={create} style={[st.btn, { backgroundColor: '#FB8500' }]}><Text style={st.btnTxt}>➕ Criar sala</Text></Pressable>
+            <Pressable onPress={() => { vib(); setCode(''); setMsg(''); setOv('join'); }} style={[st.btn, { backgroundColor: '#219EBC' }]}><Text style={st.btnTxt}>🔢 Entrar</Text></Pressable>
+          </> : <>
+            <Text style={st.cardSub}>Digite o número da sala:</Text>
+            <Text style={st.codeDark}>{(code + '____').slice(0, 4).split('').join(' ')}</Text>
+            <View style={st.pad}>{['1', '2', '3', '4', '5', '6', '7', '8', '9', '⌫', '0', '✔'].map(d => <Pressable key={d} onPress={() => { vib(8); if (d === '⌫') setCode(c => c.slice(0, -1)); else if (d === '✔') join(); else setCode(c => (c + d).slice(0, 4)); }} style={[st.key, d === '✔' && { backgroundColor: code.length === 4 ? '#06D6A0' : '#ADB5BD' }]}><Text style={st.keyTxt}>{d}</Text></Pressable>)}</View>
+          </>}
+          {!!msg && <Text style={st.msgDark}>{msg}</Text>}
+          <Pressable onPress={() => { vib(); if (ov === 'join') { setOv('choose'); setMsg(''); } else backMenu(); }} style={[st.btn, { backgroundColor: '#ADB5BD' }]}><Text style={st.btnTxt}>← Voltar</Text></Pressable>
+        </View>
       </ScrollView>
     </View>
   );
 
+  if (mode === 'lobby') { const host = !!room?.isHost; return (
+    <View style={[st.root, { backgroundColor: M.bg }]}><Bg />
+      <ScrollView contentContainerStyle={st.menu}>
+        <View style={st.card}>
+          <Text style={st.cardTitle}>Futebol online 👥</Text>
+          <Text style={st.cardSub}>Número da sala:</Text>
+          <Text style={st.bigCode}>{room?.code.split('').join(' ')}</Text>
+          <View style={st.row}>{[0, 1, 2, 3].map(k => { const i = lobby.ids[k]; const has = i !== undefined; return (
+            <View key={k} style={{ alignItems: 'center', width: 76 }}>
+              <View style={[st.slot, has && { backgroundColor: TEAM[k % 2].col, borderColor: TEAM[k % 2].dark }]}><Text style={{ fontSize: 22 }}>{has ? '🚀' : ''}</Text></View>
+              <Text style={st.slotTxt} numberOfLines={2}>{has ? `${lobby.nicks[i] || '...'}${i === room?.me ? '\n(você)' : ''}` : '–'}</Text>
+            </View>); })}</View>
+          <Text style={st.cardSub}>{lobby.ids.length}/4 na sala</Text>
+          <Text style={st.cardLabel}>🏆 Série: quem ganhar primeiro</Text>
+          <View style={st.row}>{[2, 3, 5].map(n => <Pressable key={n} testID={'bo-' + n} onPress={() => { if (!host) return; vib(8); setBo(n); boRef.current = n; roomRef.current?.send({ t: 'bo', n }); }} style={[st.chip, { paddingHorizontal: 16 }, bo === n && st.chipOn, !host && bo !== n && { opacity: 0.4 }]}><Text style={[st.chipTxt, { fontSize: 17 }, bo === n && { color: '#fff' }]}>{n} vitórias</Text></Pressable>)}</View>
+          <Text style={st.cardLabel}>Mapa</Text>
+          <MapPick can={host} card />
+          {host ? <Pressable onPress={hostStart} style={[st.btn, { backgroundColor: lobby.ids.length >= 2 ? '#06D6A0' : '#A8E6CF' }]}><Text style={st.btnTxt}>{lobby.ids.length >= 2 ? '▶ Começar!' : 'Esperando...'}</Text></Pressable>
+            : <Text style={st.cardSub}>Esperando o dono da sala começar... ⏳</Text>}
+          <Pressable onPress={backMenu} style={[st.btn, { backgroundColor: '#ADB5BD' }]}><Text style={st.btnTxt}>← Voltar</Text></Pressable>
+        </View>
+      </ScrollView>
+    </View>
+  ); }
+
   if (mode === 'end') {
     const win = result[myTeam] > result[1 - myTeam], tie = result[0] === result[1];
+    const champ = ser.champ;
+    const rank = online ? lobby.ids.map((i, k) => ({ i, team: k % 2, nick: lobby.nicks[i] || '?' })).sort((a, b) => ser.w[b.team] - ser.w[a.team]) : [];
     return (
       <View style={[st.root, { backgroundColor: M.bg }]}><Bg />
-        {win && <Confetti />}
-        <View style={st.menu}>
-          <Text style={st.big}>{tie ? '🤝' : win ? '🏆' : '⭐'}</Text>
-          <Text style={st.title}>{tie ? 'Empate!' : win ? 'Você ganhou!' : `Time ${TEAM[result[0] > result[1] ? 0 : 1].name} ganhou!`}</Text>
-          <View style={st.row}><View style={[st.scoreBox, { backgroundColor: TEAM[0].dark }]}><Text style={st.score}>{result[0]}</Text><Text style={st.chipTxt}>Azul</Text></View>
-            <Text style={st.score}>x</Text><View style={[st.scoreBox, { backgroundColor: TEAM[1].dark }]}><Text style={st.score}>{result[1]}</Text><Text style={st.chipTxt}>Laranja</Text></View></View>
-          {!win && !tie && <Text style={st.sub}>Foi muito legal! Vamos de novo? 💪</Text>}
-          <Pressable onPress={backMenu} style={[st.btn, { backgroundColor: '#06D6A0' }]}><Text style={st.btnTxt}>🏠 Voltar ao início</Text></Pressable>
-        </View>
+        {(online ? champ === myTeam : win) && <Confetti />}
+        <ScrollView contentContainerStyle={st.menu}>
+          <Text style={st.big}>{online && champ >= 0 ? '👑' : tie ? '🤝' : win ? '🏆' : '⭐'}</Text>
+          <Text style={st.title}>{online && champ >= 0 ? `Time ${TEAM[champ].name} é campeão!` : tie ? 'Empate!' : win ? 'Você ganhou!' : `Time ${TEAM[result[0] > result[1] ? 0 : 1].name} ganhou!`}</Text>
+          <View style={st.row}><View style={[st.scoreBox, { backgroundColor: TEAM[0].dark }]}><Text style={st.score}>{result[0]}</Text><Text style={st.chipTxt2}>Azul</Text></View>
+            <Text style={st.score}>x</Text><View style={[st.scoreBox, { backgroundColor: TEAM[1].dark }]}><Text style={st.score}>{result[1]}</Text><Text style={st.chipTxt2}>Laranja</Text></View></View>
+          {online && <>
+            <SeriesBar />
+            <View style={st.card}>
+              <Text style={st.cardLabel}>🏅 Ranking (partida {ser.match})</Text>
+              {rank.map((p, k) => <View key={p.i} style={st.rankRow}><Text style={st.rankTxt}>{champ === p.team ? '👑' : `${k + 1}º`} 🚀 {p.nick}{p.i === meRef.current ? ' (você)' : ''}</Text><Text style={[st.rankTxt, { color: TEAM[p.team].dark }]}>{'⭐'.repeat(ser.w[p.team]) || '–'}</Text></View>)}
+            </View>
+            {champ < 0 ? (room?.isHost ? <Pressable testID="next-match" onPress={hostStart} style={[st.btn, { backgroundColor: '#06D6A0' }]}><Text style={st.btnTxt}>▶ Próxima partida</Text></Pressable>
+              : room ? <Text style={st.sub}>Esperando a próxima partida... ⏳</Text> : null)
+              : <><Text style={st.sub}>A série acabou! Para jogar de novo, entre na sala outra vez.</Text>
+                <Pressable onPress={playAgain} style={[st.btn, { backgroundColor: '#8338EC' }]}><Text style={st.btnTxt}>🔁 Jogar de novo</Text></Pressable></>}
+          </>}
+          {!win && !tie && !online && <Text style={st.sub}>Foi muito legal! Vamos de novo? 💪</Text>}
+          <Pressable onPress={backMenu} style={[st.btn, { backgroundColor: online ? '#555' : '#06D6A0' }]}><Text style={st.btnTxt}>🏠 Voltar ao início</Text></Pressable>
+        </ScrollView>
       </View>
     );
   }
-
   // play
   let v: View2 | null = null;
   if (room && !room.isHost) { const sn = snap.current; if (sn.next && sn.prev) { const t = Math.min(1, (performance.now() - sn.at) / 55), L = (a: number, b: number) => a + (b - a) * t;
@@ -327,7 +386,7 @@ export default function App() {
     <View style={[st.root, { backgroundColor: M.bg }]}>
       <Bg />
       <View style={st.hud}>
-        <Pressable onPress={backMenu} style={st.exit}><Text style={st.chipTxt}>✖</Text></Pressable>
+        <Pressable onPress={backMenu} style={st.exit}><Text style={st.chipTxt2}>✖</Text></Pressable>
         <View style={[st.hudScore, { backgroundColor: TEAM[0].dark }]}><Text style={st.hudTxt}>🔵 {v?.sc[0] ?? 0}</Text></View>
         <Text style={st.hudTxt}>⏱ {Math.floor((v?.tm ?? 0) / 60)}:{String(Math.floor((v?.tm ?? 0) % 60)).padStart(2, '0')}</Text>
         <View style={[st.hudScore, { backgroundColor: TEAM[1].dark }]}><Text style={st.hudTxt}>🟠 {v?.sc[1] ?? 0}</Text></View>
@@ -342,6 +401,9 @@ export default function App() {
       <View style={{ position: 'absolute', left: X(GL), top: Y(FH) - 3, width: (GR - GL) * sc, height: 5 * sc + 3, backgroundColor: TEAM[0].col, opacity: 0.85, borderRadius: 4 }} />
       <Text style={{ position: 'absolute', left: X(FW / 2) - 12, top: Y(-5) - 4, fontSize: 18 }}>🥅</Text>
       <Text style={{ position: 'absolute', left: X(FW / 2) - 12, top: Y(FH) - 2, fontSize: 18 }}>🥅</Text>
+      <View style={[st.goalTag, { top: Y(0) + 4, left: X(GL), width: (GR - GL) * sc }]} pointerEvents="none"><Text style={st.goalTxt}>{myTeam === 0 ? '⬆ Chute aqui! ⚽' : '🛡️ Seu gol ⬆'}</Text></View>
+      <View style={[st.goalTag, { top: Y(FH) - 26, left: X(GL), width: (GR - GL) * sc }]} pointerEvents="none"><Text style={st.goalTxt}>{myTeam === 0 ? '🛡️ Seu gol ⬇' : '⬇ Chute aqui! ⚽'}</Text></View>
+      {room && <View style={{ position: 'absolute', top: 50, left: 0, right: 0, alignItems: 'center' }}><SeriesBar /></View>}
       {v?.ps.map(p => { const me = p.id === meRef.current; return (
         <View key={p.id} style={{ position: 'absolute', left: X(p.x) - PR * sc, top: Y(p.y) - PR * sc, width: PR * 2 * sc, height: PR * 2 * sc, borderRadius: PR * sc, backgroundColor: TEAM[p.team].col + '55', borderWidth: me ? 3 : 2, borderColor: me ? '#fff' : TEAM[p.team].col, alignItems: 'center', justifyContent: 'center' }} pointerEvents="none">
           <Text style={{ fontSize: PR * 1.5 * sc, transform: [{ rotate: `${p.a + 45}deg` }] }}>🚀</Text>
@@ -358,7 +420,7 @@ export default function App() {
             <View style={{ position: 'absolute', left: 60 - 26 + j.x * 0.6, top: 60 - 26 + j.y * 0.6, width: 52, height: 52, borderRadius: 26, backgroundColor: TEAM[myTeam].col }} /></View>}
         </View>
         <View style={{ gap: 10, justifyContent: 'center' }}>
-          <View ref={kickBtn} style={[st.act, { backgroundColor: pressed.k ? '#fff' : '#FF006E' }]}><Text style={st.actTxt}>⚽</Text><Text style={st.chipTxt}>Chutar</Text></View>
+          <View ref={kickBtn} style={[st.act, { backgroundColor: pressed.k ? '#fff' : '#FF006E' }]}><Text style={st.actTxt}>⚽</Text><Text style={st.chipTxt2}>Chutar</Text></View>
           <View ref={turboBtn} style={[st.act, { width: 90, height: 64, backgroundColor: pressed.b ? '#fff' : '#FB8500' }]}><Text style={{ fontSize: 26 }}>🔥</Text></View>
         </View>
       </View>
@@ -377,6 +439,17 @@ const st = StyleSheet.create({
   root: { flex: 1, overflow: 'hidden', userSelect: 'none' as any },
   menu: { alignItems: 'center', padding: 20, gap: 12, paddingTop: 40, flexGrow: 1 },
   big: { fontSize: 56 }, title: { fontSize: 34, fontWeight: '900', color: '#fff', textAlign: 'center' },
+  card: { backgroundColor: '#fff', borderRadius: 26, padding: 18, width: '100%', maxWidth: 440, alignItems: 'center', gap: 12 },
+  cardTitle: { fontSize: 28, fontWeight: '900', color: '#FB5607', textAlign: 'center' }, cardSub: { fontSize: 19, color: '#023047', textAlign: 'center' },
+  cardLabel: { fontSize: 18, fontWeight: '900', color: '#023047', textAlign: 'center' },
+  bigCode: { fontSize: 58, fontWeight: '900', color: '#023047', letterSpacing: 6 }, codeDark: { fontSize: 42, fontWeight: '900', color: '#023047', letterSpacing: 4 },
+  slot: { width: 50, height: 50, borderRadius: 12, borderWidth: 3, borderColor: '#023047', backgroundColor: '#E9ECEF', alignItems: 'center', justifyContent: 'center' },
+  slotTxt: { fontSize: 13, fontWeight: '800', color: '#023047', textAlign: 'center', marginTop: 4 },
+  keyTxt: { fontSize: 24, fontWeight: '900', color: '#023047' }, msgDark: { color: '#D00000', fontSize: 18, fontWeight: '800', textAlign: 'center' },
+  serBar: { flexDirection: 'row', gap: 12, backgroundColor: 'rgba(0,0,0,0.55)', paddingHorizontal: 14, paddingVertical: 5, borderRadius: 14, alignItems: 'center' }, serTxt: { color: '#fff', fontSize: 15, fontWeight: '900' },
+  rankRow: { flexDirection: 'row', justifyContent: 'space-between', width: '100%', paddingVertical: 4 }, rankTxt: { fontSize: 19, fontWeight: '800', color: '#023047' },
+  chipTxt2: { color: '#fff', fontSize: 15, fontWeight: '800' },
+  goalTag: { position: 'absolute', alignItems: 'center' }, goalTxt: { color: '#fff', fontSize: 14, fontWeight: '900', backgroundColor: 'rgba(0,0,0,0.45)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, overflow: 'hidden' },
   sub: { fontSize: 18, color: '#FFE8A3', textAlign: 'center', fontWeight: '700' },
   label: { fontSize: 18, color: '#fff', fontWeight: '800', marginTop: 6 },
   row: { flexDirection: 'row', gap: 12, justifyContent: 'center', alignItems: 'center' },
@@ -386,11 +459,11 @@ const st = StyleSheet.create({
   btnTxt: { color: '#fff', fontSize: 22, fontWeight: '900' },
   help: { color: '#ddd', fontSize: 16, textAlign: 'center', maxWidth: 340 },
   msg: { color: '#FFBE0B', fontSize: 18, fontWeight: '800', textAlign: 'center' },
-  chip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.15)', margin: 3 },
-  chipOn: { backgroundColor: '#FFBE0B' }, chipTxt: { color: '#fff', fontSize: 15, fontWeight: '800' },
+  chip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 14, backgroundColor: '#E9ECEF', margin: 3 },
+  chipOn: { backgroundColor: '#FB8500' }, chipTxt: { color: '#023047', fontSize: 15, fontWeight: '800' },
   code: { fontSize: 40, color: '#fff', fontWeight: '900', letterSpacing: 4 },
   pad: { flexDirection: 'row', flexWrap: 'wrap', width: 260, gap: 8, justifyContent: 'center' },
-  key: { width: 76, height: 56, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.18)', alignItems: 'center', justifyContent: 'center' },
+  key: { width: 76, height: 56, borderRadius: 14, backgroundColor: '#E9ECEF', alignItems: 'center', justifyContent: 'center' },
   player: { width: 300, borderRadius: 16, padding: 12, alignItems: 'center' },
   scoreBox: { width: 100, height: 100, borderRadius: 20, alignItems: 'center', justifyContent: 'center' }, score: { color: '#fff', fontSize: 44, fontWeight: '900' },
   hud: { position: 'absolute', top: 6, left: 0, right: 0, height: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12 },
