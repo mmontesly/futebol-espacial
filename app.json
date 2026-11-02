@@ -1,0 +1,5 @@
+{"expo":{"name":"Futebol Espacial","slug":"futebol-espacial","version":"1.0.0","orientation":"portrait","icon":"./assets/icon.png","userInterfaceStyle":"dark",
+"splash":{"image":"./assets/splash-icon.png","resizeMode":"contain","backgroundColor":"#2B1B4A"},
+"ios":{"bundleIdentifier":"br.com.minanoideias.futebolespacial","supportsTablet":true},
+"android":{"package":"br.com.minanoideias.futebolespacial","adaptiveIcon":{"foregroundImage":"./assets/adaptive-icon.png","backgroundColor":"#2B1B4A"}},
+"web":{"favicon":"./assets/favicon.png","output":"single","name":"Futebol Espacial","shortName":"Futebol Espacial","themeColor":"#2B1B4A","backgroundColor":"#2B1B4A","lang":"pt-BR"}}}
