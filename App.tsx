@@ -232,7 +232,7 @@ export default function App() {
       else if (m.t === 'bo') { if ([2, 3, 5].includes(m.n)) { setBo(m.n); boRef.current = m.n; } }
       else if (m.t === 'score') { if (!getR()?.isHost) { applyScore({ w: m.w, champ: m.champ, match: m.match }); if (m.champ >= 0) setTimeout(() => { getR()?.close(); setRoom(null); }, 2500); } }
     },
-    onClose: () => { if (serRef.current.champ >= 0) { setRoom(null); return; } setMsg('A sala fechou 😢'); leave(); setMode('menu'); },
+    onClose: () => { if (joining.current) return; if (serRef.current.champ >= 0) { setRoom(null); return; } setMsg('A sala fechou 😢'); leave(); setMode('menu'); },
   });
   const errText = (e: any) => e === 'full' ? 'Sala cheia ou já começou 🙈' : e === 'timeout' ? 'Demorou demais ⏳ Tente de novo.' : 'Não achei essa sala 🔍 Confira o número!';
   const create = async () => {
@@ -240,14 +240,15 @@ export default function App() {
     try { let rr: Room | null = null; const r = await createRoom(handlers(() => rr)); rr = r; meRef.current = 0; nicksRef.current = { 0: nick }; setRoom(r); hostLobby(r); setMsg(''); setMode('lobby'); }
     catch (e) { setOv('choose'); setMsg('Não deu para criar a sala 😢 Tente de novo.'); }
   };
+  const joining = useRef(false);
   const join = async () => {
     if (code.length !== 4) return; vib(); resetSeries(); setOv('wait'); setMsg('');
-    let err: any = null;
+    let err: any = null; joining.current = true;
     for (let t = 0; t < 3; t++) { // a sala pode demorar um pouquinho para aparecer: tenta 3 vezes
-      try { let rr: Room | null = null; const r = await joinRoom(code, handlers(() => rr)); rr = r; meRef.current = r.me; setRoom(r); r.send({ t: 'nick', i: r.me, n: nick }); setMode('lobby'); return; }
+      try { let rr: Room | null = null; const r = await joinRoom(code, handlers(() => rr)); rr = r; meRef.current = r.me; setRoom(r); r.send({ t: 'nick', i: r.me, n: nick }); joining.current = false; setMode('lobby'); return; }
       catch (e) { err = e; if (e === 'full') break; await new Promise(z => setTimeout(z, 1500)); }
     }
-    setOv('join'); setCode(''); setMsg(errText(err));
+    joining.current = false; setOv('join'); setCode(''); setMsg(errText(err));
   };
   const hostStart = () => {
     const r = roomRef.current; if (!r || r.ids().length < 2 || serRef.current.champ >= 0) return; vib(); r.lock();
