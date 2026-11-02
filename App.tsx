@@ -50,12 +50,12 @@ const step = (s: Sim, dt: number, onSfx: (k: string) => void) => {
     let ix = 0, iy = 0, k = false, b = false;
     if (p.ai) { // computador fácil
       const tx = s.bx + (s.bx - FW / 2) * 0.1, ty = s.by - 7; const dx = tx - p.x, dy = ty - p.y, d = Math.hypot(dx, dy) || 1;
-      const slow = d < 4 ? d / 4 : 1; ix = dx / d * 0.55 * slow; iy = dy / d * 0.55 * slow;
-      const db = Math.hypot(s.bx - p.x, s.by - p.y); if (db < 12 && s.by > p.y && Math.random() < dt * 1.2) k = true;
+      const slow = d < 4 ? d / 4 : 1; ix = dx / d * 0.45 * slow; iy = dy / d * 0.45 * slow;
+      const db = Math.hypot(s.bx - p.x, s.by - p.y); if (db < 12 && s.by > p.y && s.tm < MATCH_TIME - 2 && Math.random() < dt * 0.7) k = true;
     } else { const q = s.inputs[p.id]; if (q) { ix = q.x; iy = q.y; k = q.k; b = q.b; q.k = false; q.b = false; } }
     p.turbo = Math.max(0, p.turbo - dt); p.tcd = Math.max(0, p.tcd - dt); p.kcd = Math.max(0, p.kcd - dt);
     if (b && p.tcd <= 0) { p.turbo = 1.2; p.tcd = 4; onSfx('turbo'); }
-    const acc = p.turbo > 0 ? 260 : 150, max = p.turbo > 0 ? 85 : 45;
+    const acc = p.turbo > 0 ? 260 : 150, max = p.ai ? 28 : p.turbo > 0 ? 85 : 45;
     p.vx += ix * acc * dt; p.vy += iy * acc * dt;
     const sp = Math.hypot(p.vx, p.vy); if (sp > max) { p.vx *= max / sp; p.vy *= max / sp; }
     const dr = Math.exp(-1.8 * dt); p.vx *= dr; p.vy *= dr;
@@ -67,7 +67,7 @@ const step = (s: Sim, dt: number, onSfx: (k: string) => void) => {
     if (k && p.kcd <= 0 && s.bOut <= 0) {
       p.kcd = 0.35; p.kick = true;
       const dx = s.bx - p.x, dy = s.by - p.y, d = Math.hypot(dx, dy) || 1;
-      if (d < PR + BR + 7) { s.bvx = dx / d * 95 + p.vx * 0.3; s.bvy = dy / d * 95 + p.vy * 0.3; onSfx('kick'); }
+      if (d < PR + BR + 7) { const pw = p.ai ? 55 : 95; s.bvx = dx / d * pw + p.vx * 0.3; s.bvy = dy / d * pw + p.vy * 0.3; onSfx('kick'); }
     }
   }
   // foguetinhos não se atravessam
@@ -79,7 +79,7 @@ const step = (s: Sim, dt: number, onSfx: (k: string) => void) => {
   for (const p of s.ps) {
     const dx = s.bx - p.x, dy = s.by - p.y, d = Math.hypot(dx, dy);
     if (d > 0 && d < PR + BR) { const nx = dx / d, ny = dy / d; s.bx = p.x + nx * (PR + BR); s.by = p.y + ny * (PR + BR);
-      const vr = (s.bvx - p.vx) * nx + (s.bvy - p.vy) * ny; if (vr < 0) { s.bvx -= 1.7 * vr * nx; s.bvy -= 1.7 * vr * ny; onSfx('bump'); } }
+      const vr = (s.bvx - p.vx) * nx + (s.bvy - p.vy) * ny; if (vr < 0) { s.bvx -= 1.4 * vr * nx; s.bvy -= 1.4 * vr * ny; onSfx('bump'); } }
   }
   const bd = Math.exp(-0.45 * dt); s.bvx *= bd; s.bvy *= bd; // gravidade baixa: a bola flutua
   s.bx += s.bvx * dt; s.by += s.bvy * dt;
@@ -235,7 +235,7 @@ export default function App() {
 
   // ---------- Desenho ----------
   const M = MAPS[map];
-  const top = 56, ctrlH = 190;
+  const top = 74, ctrlH = 190;
   const sc = Math.min((width - 24) / FW, (height - top - ctrlH - 16) / FH);
   const fw = FW * sc, fh = FH * sc, ox = (width - fw) / 2;
 
