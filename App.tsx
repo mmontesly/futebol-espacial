@@ -4,7 +4,9 @@ import * as Haptics from 'expo-haptics';
 import { createRoom, joinRoom, onlineAvailable, type Room, type Msg } from './online';
 
 // ---------- Constantes do jogo (unidades do campo) ----------
-const FW = 100, FH = 150, GL = 33, GR = 67, PR = 5, BR = 3.5;
+const FW = 100, FH = 150, GL = 33, GR = 67, PR = 4.2, BR = 3.5;
+const MAXP = 10; // até 5 x 5
+const PCOL = ['#FFFFFF', '#FFD60A', '#06D6A0', '#FF006E', '#8338EC', '#3A86FF', '#FB5607', '#90E0EF', '#C77DFF', '#B5E48C']; // cor própria de cada jogador
 const GOALS_TO_WIN = 3, MATCH_TIME = 120;
 const TEAM = [{ name: 'Azul', col: '#4CC9F0', dark: '#1D6FA3' }, { name: 'Laranja', col: '#FF9F1C', dark: '#C2410C' }];
 type MapId = 'saturno' | 'estrelas';
@@ -31,7 +33,7 @@ const spawn = (s: Sim) => {
   const byTeam = [0, 0];
   const counts = [s.ps.filter(p => p.team === 0).length, s.ps.filter(p => p.team === 1).length];
   s.ps.forEach(p => { const k = byTeam[p.team]++, n = counts[p.team];
-    p.x = FW * (k + 1) / (n + 1); p.y = p.team === 0 ? FH * 0.78 : FH * 0.22; p.vx = p.vy = 0; p.a = p.team === 0 ? -90 : 90; });
+    p.x = FW * (k + 1) / (n + 1); const row = n > 3 ? (k % 2 ? 9 : -9) : 0; p.y = (p.team === 0 ? FH * 0.78 : FH * 0.22) + (p.team === 0 ? row : -row); p.vx = p.vy = 0; p.a = p.team === 0 ? -90 : 90; });
   s.bx = FW / 2; s.by = FH / 2; s.bvx = s.bvy = 0; s.bOut = 0;
 };
 const newSim = (players: { id: number; nick: string; ai?: boolean }[]): Sim => {
@@ -165,10 +167,10 @@ export default function App() {
       if (s && (!r || r.isHost)) {
         s.inputs[meRef.current] = { ...inp.current }; inp.current.k = false; inp.current.b = false;
         step(s, dt, sfx);
-        if (r) { sendAcc += dt; if (sendAcc > 0.05 || s.over) { sendAcc = 0; r.send({ t: 'st', p: s.ps.map(p => [p.id, +p.x.toFixed(1), +p.y.toFixed(1), Math.round(p.a), p.turbo > 0 ? 1 : 0, p.team]), b: [+s.bx.toFixed(1), +s.by.toFixed(1), s.bOut > 0 ? 1 : 0], sc: s.sc, tm: +s.tm.toFixed(1), ev: s.evT > 0 ? s.ev : '' }); } }
+        if (r) { sendAcc += dt; if (sendAcc > (s.ps.length > 4 ? 0.066 : 0.05) || s.over) { sendAcc = 0; r.send({ t: 'st', p: s.ps.map(p => [p.id, +p.x.toFixed(1), +p.y.toFixed(1), Math.round(p.a), p.turbo > 0 ? 1 : 0, p.team]), b: [+s.bx.toFixed(1), +s.by.toFixed(1), s.bOut > 0 ? 1 : 0], sc: s.sc, tm: +s.tm.toFixed(1), ev: s.evT > 0 ? s.ev : '' }); } }
         if (s.over) { r?.send({ t: 'end', sc: s.sc }); finish(s.sc); return; }
       } else if (r) {
-        sendAcc += dt; if (sendAcc > 0.05) { sendAcc = 0; r.send({ t: 'in', i: r.me, x: inp.current.x, y: inp.current.y, k: false, b: false }); }
+        sendAcc += dt; if (sendAcc > 0.08) { sendAcc = 0; r.send({ t: 'in', i: r.me, x: inp.current.x, y: inp.current.y, k: false, b: false }); }
       }
       setTick(t => t + 1);
       raf = requestAnimationFrame(loop);
@@ -219,11 +221,11 @@ export default function App() {
   const leave = () => { roomRef.current?.close(); setRoom(null); snap.current = { prev: null, next: null, at: 0 }; };
   const backMenu = () => { vib(); leave(); sim.current = null; setMode('menu'); setMsg(''); setCode(''); };
 
-  const hostLobby = (r: Room) => { const ids = r.ids(); const ln = { ids, nicks: { ...nicksRef.current } }; setLobby(ln); r.send({ t: 'lobby', ids, nicks: ln.nicks, map: mapRef.current, cap: 4 }); r.send({ t: 'bo', n: boRef.current }); };
+  const hostLobby = (r: Room) => { const ids = r.ids(); const ln = { ids, nicks: { ...nicksRef.current } }; setLobby(ln); r.send({ t: 'lobby', ids, nicks: ln.nicks, map: mapRef.current, cap: MAXP }); r.send({ t: 'bo', n: boRef.current }); };
   const handlers = (getR: () => Room | null) => ({
     onMsg: (m: Msg) => {
       const r = getR();
-      if (m.t === 'nick') { nicksRef.current[m.i] = m.n; if (r?.isHost) hostLobby(r); else setLobby(l => ({ ...l, nicks: { ...l.nicks, [m.i]: m.n } })); }
+      if (m.t === 'nick') { let n = m.n; if (r?.isHost && Object.entries(nicksRef.current).some(([k, v]) => +k !== m.i && v === n)) n = NICKS.find(x => !Object.values(nicksRef.current).includes(x)) || n; nicksRef.current[m.i] = n; if (r?.isHost) hostLobby(r); else setLobby(l => ({ ...l, nicks: { ...l.nicks, [m.i]: m.n } })); }
       else if (m.t === 'left') { if (m.i >= 0) delete nicksRef.current[m.i]; if (r?.isHost) { hostLobby(r); if (m.i >= 0 && sim.current) sim.current.ps = sim.current.ps.filter(p => p.id !== m.i); } else setLobby(l => ({ ...l, ids: l.ids.filter(i => i !== m.i) })); }
       else if (m.t === 'lobby') { nicksRef.current = { ...m.nicks }; setLobby({ ids: m.ids, nicks: m.nicks }); setMap(m.map as MapId); }
       else if (m.t === 'start') { nicksRef.current = { ...m.nicks }; setMap(m.map as MapId); const idx = m.ids.indexOf(meRef.current); setMyTeam(idx % 2); snap.current = { prev: null, next: null, at: 0 }; setMode('play'); }
@@ -333,12 +335,12 @@ export default function App() {
           <Text style={st.cardTitle}>Futebol online 👥</Text>
           <Text style={st.cardSub}>Número da sala:</Text>
           <Text style={st.bigCode}>{room?.code.split('').join(' ')}</Text>
-          <View style={st.row}>{[0, 1, 2, 3].map(k => { const i = lobby.ids[k]; const has = i !== undefined; return (
-            <View key={k} style={{ alignItems: 'center', width: 76 }}>
-              <View style={[st.slot, has && { backgroundColor: TEAM[k % 2].col, borderColor: TEAM[k % 2].dark }]}><Text style={{ fontSize: 22 }}>{has ? '🚀' : ''}</Text></View>
+          <View style={[st.row, { flexWrap: 'wrap', rowGap: 6 }]}>{Array.from({ length: MAXP }, (_, k) => k).map(k => { const i = lobby.ids[k]; const has = i !== undefined; return (
+            <View key={k} style={{ alignItems: 'center', width: 72 }}>
+              <View style={[st.slot, has && { backgroundColor: TEAM[k % 2].col, borderColor: PCOL[k] === '#FFFFFF' ? TEAM[k % 2].dark : PCOL[k] }]}><Text style={{ fontSize: 22 }}>{has ? '🚀' : ''}</Text></View>
               <Text style={st.slotTxt} numberOfLines={2}>{has ? `${lobby.nicks[i] || '...'}${i === room?.me ? '\n(você)' : ''}` : '–'}</Text>
             </View>); })}</View>
-          <Text style={st.cardSub}>{lobby.ids.length}/4 na sala</Text>
+          <Text style={st.cardSub}>{lobby.ids.length}/{MAXP} na sala · até 5 x 5</Text>
           <Text style={st.cardLabel}>🏆 Série: quem ganhar primeiro</Text>
           <View style={st.row}>{[2, 3, 5].map(n => <Pressable key={n} testID={'bo-' + n} onPress={() => { if (!host) return; vib(8); setBo(n); boRef.current = n; roomRef.current?.send({ t: 'bo', n }); }} style={[st.chip, { paddingHorizontal: 16 }, bo === n && st.chipOn, !host && bo !== n && { opacity: 0.4 }]}><Text style={[st.chipTxt, { fontSize: 17 }, bo === n && { color: '#fff' }]}>{n} vitórias</Text></Pressable>)}</View>
           <Text style={st.cardLabel}>Mapa</Text>
@@ -410,7 +412,7 @@ export default function App() {
       <View style={[st.goalTag, { top: Y(FH) - 26, left: X(GL), width: (GR - GL) * sc }]} pointerEvents="none"><Text style={st.goalTxt}>{myTeam === 0 ? '🛡️ Seu gol ⬇' : '⬇ Chute aqui! ⚽'}</Text></View>
       {room && <View style={{ position: 'absolute', top: 50, left: 0, right: 0, alignItems: 'center' }}><SeriesBar /></View>}
       {v?.ps.map(p => { const me = p.id === meRef.current; return (
-        <View key={p.id} style={{ position: 'absolute', left: X(p.x) - PR * sc, top: Y(p.y) - PR * sc, width: PR * 2 * sc, height: PR * 2 * sc, borderRadius: PR * sc, backgroundColor: TEAM[p.team].col + '55', borderWidth: me ? 3 : 2, borderColor: me ? '#fff' : TEAM[p.team].col, alignItems: 'center', justifyContent: 'center' }} pointerEvents="none">
+        <View key={p.id} style={{ position: 'absolute', left: X(p.x) - PR * sc, top: Y(p.y) - PR * sc, width: PR * 2 * sc, height: PR * 2 * sc, borderRadius: PR * sc, backgroundColor: TEAM[p.team].col + '55', borderWidth: me ? 4 : 3, borderColor: me ? '#fff' : PCOL[Math.max(0, lobby.ids.indexOf(p.id))] || TEAM[p.team].col, alignItems: 'center', justifyContent: 'center' }} pointerEvents="none">
           <Text style={{ fontSize: PR * 1.5 * sc, transform: [{ rotate: `${p.a + 45}deg` }] }}>🚀</Text>
           {p.turbo && <Text style={{ position: 'absolute', fontSize: 14, top: -8, right: -6 }}>🔥</Text>}
           <Text numberOfLines={1} style={st.tag}>{me ? 'Você' : p.nick}</Text>

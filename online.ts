@@ -22,7 +22,7 @@ export async function createRoom(h: Handlers, tries = 5): Promise<Room> {
   const code = String(1000 + Math.floor(Math.random() * 9000));
   const peer = await makePeer(PREFIX + code);
   const conns = new Map<number, any>();
-  let locked = false, cap = 4;
+  let locked = false, cap = MAX;
   const ids = () => [0, ...conns.keys()].sort((a, b) => a - b);
   const bcast = (m: Msg, except?: number) => conns.forEach((c, i) => { if (i !== except && c.open) c.send(m); });
   return new Promise((resolve, reject) => {
