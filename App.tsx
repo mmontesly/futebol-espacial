@@ -158,25 +158,46 @@ export default function App() {
   };
 
   // ---------- Loop ----------
+  // Simulação do host num setInterval (continua mesmo se o requestAnimationFrame parar) com try/catch,
+  // desenho no requestAnimationFrame. Convidados detectam host parado e conexão caída.
+  const [stall, setStall] = useState(0); // 0 ok, >0 segundos sem notícias do host
+  const lastSt = useRef(0), lastIn = useRef<Record<number, number>>({});
+  if (Platform.OS === 'web' && typeof window !== 'undefined') Object.assign((window as any).__fe, { stall, lastSt });
   useEffect(() => {
     if (mode !== 'play') return;
-    let raf = 0, last = 0, sendAcc = 0;
-    const loop = (ts: number) => {
-      const dt = last ? Math.min((ts - last) / 1000, 0.05) : 0; last = ts;
-      const r = roomRef.current, s = sim.current;
-      if (s && (!r || r.isHost)) {
-        s.inputs[meRef.current] = { ...inp.current }; inp.current.k = false; inp.current.b = false;
-        step(s, dt, sfx);
-        if (r) { sendAcc += dt; if (sendAcc > (s.ps.length > 4 ? 0.066 : 0.05) || s.over) { sendAcc = 0; r.send({ t: 'st', p: s.ps.map(p => [p.id, +p.x.toFixed(1), +p.y.toFixed(1), Math.round(p.a), p.turbo > 0 ? 1 : 0, p.team]), b: [+s.bx.toFixed(1), +s.by.toFixed(1), s.bOut > 0 ? 1 : 0], sc: s.sc, tm: +s.tm.toFixed(1), ev: s.evT > 0 ? s.ev : '' }); } }
-        if (s.over) { r?.send({ t: 'end', sc: s.sc }); finish(s.sc); return; }
-      } else if (r) {
-        sendAcc += dt; if (sendAcc > 0.08) { sendAcc = 0; r.send({ t: 'in', i: r.me, x: inp.current.x, y: inp.current.y, k: false, b: false }); }
-      }
-      setTick(t => t + 1);
-      raf = requestAnimationFrame(loop);
+    let raf = 0, alive = true, last = performance.now(), sendAcc = 0, inAcc = 0;
+    lastSt.current = performance.now(); lastIn.current = {};
+    const tick = () => {
+      try {
+        const now = performance.now(); let el = Math.min((now - last) / 1000, 0.25); last = now;
+        const r = roomRef.current, s = sim.current;
+        if (s && (!r || r.isHost)) {
+          s.inputs[meRef.current] = { ...inp.current }; inp.current.k = false; inp.current.b = false;
+          while (el > 0 && !s.over) { const d = Math.min(el, 0.02); step(s, d, sfx); el -= d; }
+          if (r) {
+            // convidado sem mandar nada por 10 s: sai do jogo (não trava os outros)
+            for (const p of [...s.ps]) if (p.id !== 0 && lastIn.current[p.id] === undefined) lastIn.current[p.id] = now;
+            s.ps = s.ps.filter(p => p.id === 0 || now - (lastIn.current[p.id] ?? now) < 10000);
+            sendAcc += (now - (r as any)._t || 0) / 1000; (r as any)._t = now;
+            if (sendAcc > (s.ps.length > 4 ? 0.066 : 0.05) || s.over) { sendAcc = 0; r.send({ t: 'st', p: s.ps.map(p => [p.id, +p.x.toFixed(1), +p.y.toFixed(1), Math.round(p.a), p.turbo > 0 ? 1 : 0, p.team]), b: [+s.bx.toFixed(1), +s.by.toFixed(1), s.bOut > 0 ? 1 : 0], sc: s.sc, tm: +s.tm.toFixed(1), ev: s.evT > 0 ? s.ev : '' }); }
+          }
+          if (s.over) { alive = false; r?.send({ t: 'end', sc: s.sc }); finish(s.sc); }
+        } else if (r) {
+          inAcc += el; if (inAcc > 0.08) { inAcc = 0; r.send({ t: 'in', i: r.me, x: inp.current.x, y: inp.current.y, k: false, b: false }); }
+          const quiet = (now - lastSt.current) / 1000;
+          setStall(quiet > 2 ? Math.floor(quiet) : 0);
+          if (quiet > 15) { alive = false; setMode('menu'); setMsg('A conexão caiu 😢 Entre na sala de novo.'); sim.current = null; try { leave(); } catch {} }
+        }
+      } catch (e) { console.warn('loop', e); }
     };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
+    const iv = setInterval(() => { if (alive) tick(); }, 16);
+    const draw = () => { if (!alive) return; setTick(t => t + 1); raf = requestAnimationFrame(draw); };
+    raf = requestAnimationFrame(draw);
+    // Mantém a tela acesa durante a partida
+    let lock: any = null;
+    const wake = async () => { try { if (document.visibilityState === 'visible') lock = await (navigator as any).wakeLock?.request('screen'); } catch {} };
+    if (Platform.OS === 'web') { wake(); document.addEventListener('visibilitychange', wake); }
+    return () => { alive = false; clearInterval(iv); cancelAnimationFrame(raf); setStall(0); if (Platform.OS === 'web') { document.removeEventListener('visibilitychange', wake); try { lock?.release(); } catch {} } };
   }, [mode]);
 
   // ---------- Controles (multitoque com pointer events na web) ----------
@@ -229,10 +250,10 @@ export default function App() {
       else if (m.t === 'left') { if (m.i >= 0) delete nicksRef.current[m.i]; if (r?.isHost) { hostLobby(r); if (m.i >= 0 && sim.current) sim.current.ps = sim.current.ps.filter(p => p.id !== m.i); } else setLobby(l => ({ ...l, ids: l.ids.filter(i => i !== m.i) })); }
       else if (m.t === 'lobby') { nicksRef.current = { ...m.nicks }; setLobby({ ids: m.ids, nicks: m.nicks }); setMap(m.map as MapId); }
       else if (m.t === 'start') { nicksRef.current = { ...m.nicks }; setMap(m.map as MapId); const idx = m.ids.indexOf(meRef.current); setMyTeam(idx % 2); snap.current = { prev: null, next: null, at: 0 }; setMode('play'); }
-      else if (m.t === 'in') { const s = sim.current; if (!s) return; const q = s.inputs[m.i] || { x: 0, y: 0, k: false, b: false }; q.x = m.x; q.y = m.y; if (m.k) q.k = true; if (m.b) q.b = true; s.inputs[m.i] = q; }
+      else if (m.t === 'in') { lastIn.current[m.i] = performance.now(); const s = sim.current; if (!s) return; const q = s.inputs[m.i] || { x: 0, y: 0, k: false, b: false }; q.x = m.x; q.y = m.y; if (m.k) q.k = true; if (m.b) q.b = true; s.inputs[m.i] = q; }
       else if (m.t === 'st') {
         const v: View2 = { ps: m.p.map(a => ({ id: a[0], x: a[1], y: a[2], a: a[3], turbo: !!a[4], team: a[5], nick: nicksRef.current[a[0]] || '' })), bx: m.b[0], by: m.b[1], bOut: !!m.b[2], sc: m.sc, tm: m.tm, ev: m.ev || '', evT: m.ev ? 1 : 0 };
-        const sn = snap.current; if (sn.next && sn.next.ev !== v.ev && v.ev.startsWith('GOL')) sfx('goal'); sn.prev = sn.next || v; sn.next = v; sn.at = performance.now();
+        lastSt.current = performance.now(); const sn = snap.current; if (sn.next && sn.next.ev !== v.ev && v.ev.startsWith('GOL')) sfx('goal'); sn.prev = sn.next || v; sn.next = v; sn.at = performance.now();
       }
       else if (m.t === 'end') { finish(m.sc); }
       else if (m.t === 'bo') { if ([2, 3, 5].includes(m.n)) { setBo(m.n); boRef.current = m.n; } }
@@ -418,6 +439,7 @@ export default function App() {
           <Text numberOfLines={1} style={st.tag}>{me ? 'Você' : p.nick}</Text>
         </View>); })}
       {v && !v.bOut && <Text style={{ position: 'absolute', left: X(v.bx) - BR * sc * 1.15, top: Y(v.by) - BR * sc * 1.35, fontSize: BR * 2 * sc }} pointerEvents="none">⚽</Text>}
+      {stall > 0 && <View style={st.ev} pointerEvents="none"><Text style={[st.evTxt, { fontSize: 22 }]}>⏳ Esperando o dono da sala...</Text></View>}
       {v && v.evT > 0 && !!v.ev && <View style={st.ev} pointerEvents="none"><Text style={st.evTxt}>{v.ev}</Text></View>}
       {/* controles */}
       <View ref={ctrlRef} style={[st.ctrl, { height: ctrlH }]}>

@@ -24,7 +24,7 @@ export async function createRoom(h: Handlers, tries = 5): Promise<Room> {
   const conns = new Map<number, any>();
   let locked = false, cap = MAX;
   const ids = () => [0, ...conns.keys()].sort((a, b) => a - b);
-  const bcast = (m: Msg, except?: number) => conns.forEach((c, i) => { if (i !== except && c.open) c.send(m); });
+  const bcast = (m: Msg, except?: number) => conns.forEach((c, i) => { if (i !== except && c.open) try { c.send(m); } catch {} });
   return new Promise((resolve, reject) => {
     let opened = false;
     peer.on('open', () => { opened = true; resolve({ code, me: 0, isHost: true, ids, lock: () => { locked = true; }, setCap: n => { cap = Math.min(MAX, n); }, send: m => bcast(m), close: () => { try { peer.destroy(); } catch {} } }); });
@@ -59,7 +59,7 @@ export async function joinRoom(code: string, h: Handlers): Promise<Room> {
       let cur: number[] = [];
       c.on('data', (d: any) => {
         if (d.t === 'full') { clearTimeout(timer); return fail('full'); }
-        if (d.t === 'hello') { clearTimeout(timer); resolve({ code, me: d.you, isHost: false, ids: () => cur, lock: () => {}, setCap: () => {}, send: m => c.open && c.send(m), close: () => { try { c.close(); peer.destroy(); } catch {} } }); return; }
+        if (d.t === 'hello') { clearTimeout(timer); resolve({ code, me: d.you, isHost: false, ids: () => cur, lock: () => {}, setCap: () => {}, send: m => { try { if (c.open) c.send(m); } catch {} }, close: () => { try { c.close(); peer.destroy(); } catch {} } }); return; }
         if (d.t === 'lobby' || d.t === 'start') cur = d.ids;
         h.onMsg(d);
       });
